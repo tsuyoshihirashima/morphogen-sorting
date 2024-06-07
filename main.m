@@ -2,13 +2,10 @@ close all
 clear
 tic
 
-dir_name = MakeDirectory();
+VIS=1;
 
 %% Parameter Setting
 prm = GetParameters();
-
-filename = [dir_name, '/parameters.mat'];
-save(filename, 'prm');
 
 %% Get positions of hexagons
 [X,Y]=GetCellPosition(prm);
@@ -17,9 +14,8 @@ save(filename, 'prm');
 [nb_i, nb_j] = GetNeighborsIndex(prm);
 
 %% GFP, Input, Cadherin etc.
-beta = 0.5;
+beta = 0.5; % default: 0.5
 gfp = 1*exp(-beta*X);
-%gfp = rand(prm.YMAX, prm.XMAX);
 input = gfp;
 input(find(input>1))=1;
 
@@ -28,8 +24,13 @@ input(find(input>1))=1;
 cadherin = zeros(prm.YMAX, prm.XMAX);
 % Cell index
 cell = reshape(1:prm.CELL_NUMB, prm.YMAX, prm.XMAX);
-% Label for noise cells; 1: normal, 2: noise
+% Label for noise cells; 1: normal, 2: noise(aberrant)
 label = ones(prm.YMAX, prm.XMAX);
+
+%% Distribution of Saturation in Ecad sensitivity
+mu = 0.3;
+sigma = 0.0;
+theta = normrnd(mu, sigma, prm.YMAX, prm.XMAX);
 
 %% Monte-Carlo Dynamics
 i_vec = randi(prm.XMAX, prm.STEP_MAX, 1); % Preset vector for random choice of cells
@@ -40,7 +41,7 @@ mcs_unit = prm.XMAX*prm.YMAX;
 indx = 1; % For "noise" case
 for mcs = 0 : prm.MCS_TIME %
 
-    % Noise cell generation
+    % Noise(aberrant) cell generation
     if mod(mcs,5)==0 && 24 < mcs && 1 <= prm.NOISE
 
         rndi = randi([7 prm.XMAX-1]);
@@ -57,15 +58,11 @@ for mcs = 0 : prm.MCS_TIME %
     end
 
     % Counting & Visualization
-    if mod(mcs,10)==0 || mcs==0
-        txt = ['mcs: ', num2str(mcs)];
-        disp(txt)
-
-        Visualization(prm, X, Y, cadherin, label, 0.5);
-        filename = [dir_name, '/image', num2str(mcs), '.png'];
-        saveas(gcf, filename);
+    if VIS==1
+        if mod(mcs,20)==0 || mcs==0
+            Visualization(prm, X, Y, cadherin, label, 0.5);
+        end
     end
-
 
     %% Cadherin Dynamics
     cadherin = CadherinDynamics(prm, input, cadherin, label);
@@ -90,8 +87,8 @@ for mcs = 0 : prm.MCS_TIME %
         before_cad = 0;
 
         % 2-1. Get Cadherin energy differencefor c1 and c2
-        before_cad = before_cad + GetCadherinEnergy(c1, c1_i, c1_j, nb_i, nb_j, cadherin, prm.CADMODE);
-        before_cad = before_cad + GetCadherinEnergy(c2, c2_i, c2_j, nb_i, nb_j, cadherin, prm.CADMODE);
+        before_cad = before_cad + GetCadherinEnergy(c1, c1_i, c1_j, nb_i, nb_j, cadherin, theta, prm.CADMODE);
+        before_cad = before_cad + GetCadherinEnergy(c2, c2_i, c2_j, nb_i, nb_j, cadherin, theta, prm.CADMODE);
 
         % 2-2. Energy for neighboring cells of c1 and c2
         c1_lst = (nb_i(c1,1:numb_c1nb)-1)*prm.YMAX + nb_j(c1,1:numb_c1nb); % c1 neighbors
@@ -102,9 +99,8 @@ for mcs = 0 : prm.MCS_TIME %
         for s = 1:len
             c_i = floor((lst(s)-1)/prm.YMAX) + 1;
             c_j = rem(lst(s)-1,prm.YMAX) + 1;
-            before_cad = before_cad + GetCadherinEnergy(lst(s), c_i, c_j, nb_i, nb_j, cadherin, prm.CADMODE);
+            before_cad = before_cad + GetCadherinEnergy(lst(s), c_i, c_j, nb_i, nb_j, cadherin, theta, prm.CADMODE);
         end
-
 
         % 3. Cadherin energy in "After"
         after_cad = 0;
@@ -113,27 +109,29 @@ for mcs = 0 : prm.MCS_TIME %
         cadherin = SwapValues(prm, c1, c2, cadherin); % Cell Swapping
 
         % 3-1. Get Cadherin energy differencefor c1 and c2
-        after_cad = after_cad + GetCadherinEnergy(c1, c1_i, c1_j, nb_i, nb_j, cadherin, prm.CADMODE);
-        after_cad = after_cad + GetCadherinEnergy(c2, c2_i, c2_j, nb_i, nb_j, cadherin, prm.CADMODE);
+        after_cad = after_cad + GetCadherinEnergy(c1, c1_i, c1_j, nb_i, nb_j, cadherin, theta, prm.CADMODE);
+        after_cad = after_cad + GetCadherinEnergy(c2, c2_i, c2_j, nb_i, nb_j, cadherin, theta, prm.CADMODE);
 
         % 3-2. Energy for neighboring cells of c1 and c2 (...can use 'lst')
         for s = 1:len
             c_i = floor((lst(s)-1)/prm.YMAX) + 1;
             c_j = rem(lst(s)-1,prm.YMAX) + 1;
-            after_cad = after_cad + GetCadherinEnergy(lst(s), c_i, c_j, nb_i, nb_j, cadherin, prm.CADMODE);
+            after_cad = after_cad + GetCadherinEnergy(lst(s), c_i, c_j, nb_i, nb_j, cadherin, theta, prm.CADMODE);
         end
 
         % 4. Sate transition (swapping of cells) based on energy difference
         delta_cad = prm.CAD*(after_cad - before_cad);
+
+        dlt_list(step)=delta_cad;
 
         if exp(-delta_cad/1) < rnd_vec(step)
             cadherin = SwapValues(prm, c1, c2, cadherin); % back to 'before' state of cadherin
         else
             cell = SwapValues(prm, c1, c2, cell);
             label = SwapValues(prm, c1, c2, label);
+            theta = SwapValues(prm, c1, c2, theta);
         end
 
     end
-
 end
 
